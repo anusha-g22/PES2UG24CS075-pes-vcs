@@ -1,67 +1,41 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+// tree.h — Tree object interface
+//
+// A tree object represents a directory snapshot. Each entry maps a name
+// to either a blob (file) or another tree (subdirectory), along with
+// the file mode (permissions + type).
 
-#define MAX_ENTRIES 100
+#ifndef TREE_H
+#define TREE_H
 
-// Structure for a tree entry
+#include "pes.h"
+
+#define MAX_TREE_ENTRIES 1024
+
 typedef struct {
-    char mode[7];     // "100644" or "040000"
-    char hash[65];
-    char name[256];
+    uint32_t mode;          // 100644 (regular), 100755 (executable), 040000 (directory)
+    ObjectID hash;          // SHA-256 of the blob or subtree
+    char name[256];         // Entry name (filename or directory name, no path separators)
 } TreeEntry;
 
-// Simple tree struct
 typedef struct {
-    TreeEntry entries[MAX_ENTRIES];
+    TreeEntry entries[MAX_TREE_ENTRIES];
     int count;
 } Tree;
 
-// Function prototype from object.c
-int object_write(const char *type, const void *data, size_t size, char *out_hash);
+// Parse raw tree object data (as read from the object store) into a Tree struct.
+int tree_parse(const void *data, size_t len, Tree *tree_out);
 
-// Compare for sorting
-int cmp_entries(const void *a, const void *b) {
-    TreeEntry *ea = (TreeEntry *)a;
-    TreeEntry *eb = (TreeEntry *)b;
-    return strcmp(ea->name, eb->name);
-}
+// Serialize a Tree struct into raw bytes suitable for object_write(OBJ_TREE, ...).
+// Entries MUST be sorted by name before serialization.
+// Caller must free(*data_out).
+int tree_serialize(const Tree *tree, void **data_out, size_t *len_out);
 
-// Serialize tree
-void serialize_tree(Tree *tree, char **out_buf, size_t *out_size) {
-    size_t size = 0;
-    char *buffer = malloc(1024);
+// Build a Tree from the current index contents.
+// This is what `pes commit` uses: it reads the index and constructs a tree
+// hierarchy that represents the staged snapshot. For nested paths
+// (e.g., "src/main.c"), this function must create subtrees.
+// Writes all tree objects to the object store.
+// Returns the root tree's ObjectID in *id_out.
+int tree_from_index(ObjectID *id_out);
 
-    for (int i = 0; i < tree->count; i++) {
-        char line[512];
-        int len = snprintf(line, sizeof(line), "%s %s %s\n",
-                           tree->entries[i].mode,
-                           tree->entries[i].hash,
-                           tree->entries[i].name);
-
-        memcpy(buffer + size, line, len);
-        size += len;
-    }
-
-    *out_buf = buffer;
-    *out_size = size;
-}
-
-// MAIN FUNCTION YOU NEED
-int tree_from_index(char *out_hash) {
-    // For now: dummy tree (we'll improve later in index phase)
-    Tree tree;
-    tree.count = 0;
-
-    // Sort entries (even if empty)
-    qsort(tree.entries, tree.count, sizeof(TreeEntry), cmp_entries);
-
-    char *buf;
-    size_t size;
-    serialize_tree(&tree, &buf, &size);
-
-    int result = object_write("tree", buf, size, out_hash);
-
-    free(buf);
-    return result;
-}
+#endif // TREE_H
